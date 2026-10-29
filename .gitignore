@@ -1,0 +1,6 @@
+node_modules
+dist
+*.tsbuildinfo
+.vite
+# Nunca versionar dados reais de folha
+*.real.*

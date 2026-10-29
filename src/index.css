@@ -1,0 +1,81 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Segoe UI', 'Inter', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'Cascadia Mono', 'Consolas', ui-monospace, 'SFMono-Regular', monospace;
+
+  --color-ok: #15803d;
+  --color-ok-bg: #ecfdf3;
+  --color-warn: #b45309;
+  --color-warn-bg: #fffbeb;
+  --color-block: #be123c;
+  --color-block-bg: #fff1f2;
+  --color-sel: #2563eb;
+  --color-sel-bg: #dbeafe;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-slate-100 text-slate-800 antialiased;
+    font-size: 13px;
+  }
+  ::selection {
+    background: #bfdbfe;
+  }
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-sel);
+    outline-offset: 1px;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex h-7 items-center gap-1.5 rounded border border-slate-300 bg-white px-2.5 text-[12px] font-medium text-slate-700 whitespace-nowrap shadow-xs hover:bg-slate-50 active:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45;
+  }
+  .btn-primary {
+    @apply border-slate-900 bg-slate-900 text-white hover:bg-slate-800 active:bg-slate-950;
+  }
+  .btn-ghost {
+    @apply border-transparent bg-transparent shadow-none hover:bg-slate-200/70;
+  }
+  .btn-sm {
+    @apply h-6 px-2 text-[11px];
+  }
+  .field {
+    @apply h-7 rounded border border-slate-300 bg-white px-2 text-[12px] text-slate-800 outline-none focus:border-sel focus:ring-2 focus:ring-sel/20;
+  }
+  .kbd {
+    @apply rounded border border-slate-300 bg-white px-1 font-mono text-[10px] text-slate-500;
+  }
+  .label {
+    @apply text-[11px] font-medium tracking-wide text-slate-500 uppercase;
+  }
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+@keyframes flash {
+  0% {
+    background-color: #93c5fd;
+  }
+  100% {
+    background-color: var(--color-sel-bg);
+  }
+}
+.flash {
+  animation: flash 0.9s ease-out;
+}
