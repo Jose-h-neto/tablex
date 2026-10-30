@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import type { IssueCode, ResolvedRow, Segment, Status } from '../domain/types';
 import {
   checkConfig,
+  configQuestions,
   countRows,
   groupIssues,
   isAcknowledgeable,
@@ -21,6 +22,8 @@ export interface Derived {
   groups: IssueGroup[];
   counters: Counters;
   config: ConfigIssue[];
+  /** Configuração a perguntar considerando todos os lançamentos ativos. */
+  questions: ConfigIssue[];
   msgNumber: Map<string, number>;
   /** Lançamentos ligados a cada segmento (linha) da mensagem original. */
   bySegment: Map<string, string[]>;
@@ -64,6 +67,7 @@ export function DerivedProvider({ children }: { children: ReactNode }) {
       groups: groupIssues(rows),
       counters: countRows(rows),
       config: checkConfig(settings, rows),
+      questions: configQuestions(settings, rows),
       msgNumber: new Map(result.messages.map((m) => [m.id, m.index + 1])),
       bySegment,
       openAttention,

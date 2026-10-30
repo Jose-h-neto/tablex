@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, type ImportSettings, type ReviewState, type RubricDictionary } from '../src/domain/types';
-import { checkConfig, countRows, groupIssues, pickSuperseded, resolveRows } from '../src/engine/MovementValidator';
-import { processText } from '../src/engine/pipeline';
+import { checkConfig, configQuestions, countRows, groupIssues, pickSuperseded, resolveRows } from '../src/engine/MovementValidator';
+import { detectCompetencia, processText, repeatedMessageExclusions } from '../src/engine/pipeline';
 import { setMapping } from '../src/engine/RubricMapper';
 import { MSG_AGOSTO, MSG_CORRECOES, MSG_FECHAMENTO, MSG_OUTUBRO } from '../src/sample/mensagensAnonimizadas';
 
@@ -152,6 +152,37 @@ describe('duplicidades e conflitos', () => {
     expect(ok.rows.flatMap((r) => r.issues.map((i) => i.code))).not.toContain('NOME_DIVERGENTE');
     const bad = run('501 - NUBIA EXEMPLO - R$ 10,00 - desconto material didático\n501 - OUTRA PESSOA - R$ 20,00 - reembolso estacionamento', dict);
     expect(bad.rows.flatMap((r) => r.issues.map((i) => i.code))).toContain('NOME_DIVERGENTE');
+  });
+});
+
+describe('fluxo com poucos cliques', () => {
+  it('usa a competência mais recente citada nas mensagens', () => {
+    const p = processText([MSG_OUTUBRO, MSG_AGOSTO].join('\n'), OUT);
+    expect(detectCompetencia(p.messages)).toEqual({ year: 2026, month: 10 });
+    expect(detectCompetencia(processText(MSG_FECHAMENTO, OUT).messages)).toBeNull();
+  });
+
+  it('ignora mensagem repetida, mantendo os lançamentos rastreáveis como excluídos', () => {
+    const p = processText([MSG_FECHAMENTO, MSG_FECHAMENTO].join('\n'), OUT);
+    const excluded = repeatedMessageExclusions(p);
+    const second = p.movements.filter((m) => m.messageId === p.messages[1]!.id);
+    expect(Object.keys(excluded).sort()).toEqual(second.map((m) => m.id).sort());
+    expect(p.movements.filter((m) => excluded[m.id] && m.messageId === p.messages[0]!.id)).toEqual([]);
+  });
+
+  it('pergunta a configuração antes de haver lançamento pronto, sem bloquear o que já pode sair', () => {
+    const { rows } = run(MSG_FECHAMENTO, {}, emptyReview(), DEFAULT_SETTINGS);
+    expect(configQuestions(DEFAULT_SETTINGS, rows).map((c) => c.code)).toEqual(['EMPRESA', 'FIXAR', 'HORAS']);
+    expect(checkConfig(DEFAULT_SETTINGS, rows).map((c) => c.code)).toEqual(['EMPRESA']);
+  });
+
+  it('trecho não interpretado com rubrica manual exige valor antes de ficar válido', () => {
+    const p = processText('501 - FULANO EXEMPLO - bônus de natal', OUT);
+    const id = p.movements[0]!.id;
+    const ctx = (over: ReviewState['overrides']) =>
+      resolveRows(p.movements, { messages: p.messages, settings: SETTINGS, dictionary: {}, sessionCompetencia: OUT, review: { ...emptyReview(), overrides: over } })[0]!;
+    expect(ctx({ [id]: { rubricCode: '700' } }).issues.map((i) => i.code)).toContain('VALOR_AUSENTE');
+    expect(ctx({ [id]: { rubricCode: '700', amount: 50, unit: 'valor' } }).status).toBe('valido');
   });
 });
 

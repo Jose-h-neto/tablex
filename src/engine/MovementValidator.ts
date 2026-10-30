@@ -122,7 +122,9 @@ export function resolveRows(movements: Movement[], ctx: ValidationContext): Reso
     if (!matricula) add('MATRICULA_AUSENTE', 'Matrícula não identificada.');
     else if (!/^\d{1,10}$/.test(matricula)) add('MATRICULA_INVALIDA', `Matrícula “${matricula}” deve conter apenas dígitos.`);
 
-    if (m.importable) {
+    // Trecho não interpretado com rubrica manual passa a ser um lançamento comum: exige valor e unidade.
+    const manuallyClassified = !m.importable && !!ov?.rubricCode && m.flags.some((f) => f.code === 'NAO_INTERPRETADO');
+    if (m.importable || manuallyClassified) {
       if (!rubric.code) {
         add('RUBRICA_NAO_CONFIGURADA', `Sem código de rubrica para “${m.categoryLabel}”. Configure no dicionário para aplicar a todos os lançamentos deste tipo.`);
       } else if (!RUBRIC_CODE_RE.test(rubric.code)) {
@@ -290,6 +292,15 @@ export function checkConfig(settings: ImportSettings, rows: ResolvedRow[]): Conf
     out.push({ code: 'HORAS', message: 'Formato das horas não definido (decimal 4,75 ou sexagesimal 4,45).' });
   }
   return out;
+}
+
+/**
+ * Configuração a perguntar já na conferência, considerando todos os lançamentos ativos
+ * (e não só os prontos), para o usuário responder de uma vez em vez de descobrir aos poucos.
+ */
+export function configQuestions(settings: ImportSettings, rows: ResolvedRow[]): ConfigIssue[] {
+  const candidates = rows.filter((r) => !r.exclusion && r.m.importable).map((r) => ({ ...r, exportable: true }));
+  return checkConfig(settings, candidates);
 }
 
 export interface Counters {

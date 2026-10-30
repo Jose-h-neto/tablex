@@ -1,75 +1,73 @@
 import { useEffect, useRef } from 'react';
-import { useApp } from '../state/store';
 import { SAMPLE_TEXT } from '../sample/mensagensAnonimizadas';
-import { IconShield } from './Icons';
+import { useApp } from '../state/store';
 
+/** Só uma caixa de texto: colar já processa. */
 export function InputView() {
   const text = useApp((s) => s.inputText);
   const hasResult = useApp((s) => s.result !== null);
-  const { setInputText, process } = useApp.getState();
+  const { setInputText } = useApp.getState();
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => ref.current?.focus(), []);
 
-  const lines = text ? text.split('\n').filter((l) => l.trim()).length : 0;
-
-  const onDrop = (e: React.DragEvent) => {
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
-    e.preventDefault();
-    if (!/\.(txt|md)$/i.test(file.name)) return;
-    void file.text().then((t) => setInputText(text ? `${text}\n\n${t}` : t));
+  const run = () => {
+    const s = useApp.getState();
+    if (s.history.length > 0 && !window.confirm('Processar de novo descarta as alterações feitas na conferência. Continuar?')) return;
+    s.process();
   };
 
   return (
-    <div className="flex min-h-0 flex-1 justify-center overflow-auto p-4">
-      <div className="flex w-full max-w-5xl min-h-0 flex-col rounded-md border border-slate-200 bg-white shadow-xs">
-        <div className="flex items-baseline justify-between border-b border-slate-200 px-4 py-2.5">
-          <div>
-            <h1 className="text-[14px] font-semibold text-slate-900">Mensagens do cliente</h1>
-            <p className="text-[12px] text-slate-500">
-              Cole uma ou várias mensagens de uma vez. Destinatário, competência, seções e funcionários são identificados
-              automaticamente.
-            </p>
-          </div>
-          <span className="text-[11px] tabular-nums text-slate-400">{lines} linhas com conteúdo</span>
-        </div>
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 pb-10">
+      <div className="flex h-full max-h-[640px] w-full max-w-3xl flex-col gap-3">
         <textarea
           ref={ref}
           value={text}
           onChange={(e) => setInputText(e.target.value)}
-          onDrop={onDrop}
+          onPaste={(e) => {
+            if (text.trim()) return;
+            const pasted = e.clipboardData.getData('text');
+            if (!pasted.trim()) return;
+            e.preventDefault();
+            setInputText(pasted);
+            run();
+          }}
           onKeyDown={(e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
               e.preventDefault();
-              process();
+              run();
             }
           }}
           spellCheck={false}
-          placeholder={'Carla\nbom dia,\n\nDescontos:\n999 - NOME DO FUNCIONÁRIO - R$ 705,10 - desconto material didático\n…'}
-          className="min-h-[360px] flex-1 resize-none px-4 py-3 font-mono text-[12.5px] leading-[1.6] text-slate-800 outline-none placeholder:text-slate-300"
-          aria-label="Texto das mensagens"
+          placeholder="Cole aqui as mensagens do cliente"
+          aria-label="Mensagens do cliente"
+          className="min-h-0 flex-1 resize-none rounded-lg border border-slate-200 bg-white p-5 text-[14px] leading-relaxed text-slate-800 outline-none placeholder:text-slate-400 focus:border-slate-400"
         />
-        <div className="flex items-center gap-2 border-t border-slate-200 bg-slate-50 px-4 py-2">
-          <button type="button" className="btn btn-primary" onClick={process} disabled={!text.trim()}>
-            Processar <span className="kbd border-slate-600 bg-slate-800 text-slate-300">Ctrl+Enter</span>
-          </button>
-          {hasResult && (
-            <button type="button" className="btn" onClick={() => useApp.setState({ phase: 'review' })}>
-              Voltar à conferência sem reprocessar
+        <div className="flex h-9 items-center justify-between">
+          <div className="flex gap-4 text-[12px] text-slate-400">
+            {!text.trim() && (
+              <button
+                type="button"
+                className="hover:text-slate-700"
+                onClick={() => {
+                  setInputText(SAMPLE_TEXT);
+                  run();
+                }}
+              >
+                Ver um exemplo
+              </button>
+            )}
+            {hasResult && (
+              <button type="button" className="hover:text-slate-700" onClick={() => useApp.setState({ phase: 'review' })}>
+                Voltar à conferência
+              </button>
+            )}
+          </div>
+          {text.trim() && (
+            <button type="button" className="btn btn-primary h-9 px-5 text-[13px]" onClick={run}>
+              Processar
             </button>
           )}
-          <button type="button" className="btn btn-ghost" onClick={() => setInputText(SAMPLE_TEXT)}>
-            Carregar exemplo anonimizado
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={() => setInputText('')} disabled={!text}>
-            Limpar
-          </button>
-          <div className="flex-1" />
-          <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
-            <IconShield className="text-ok" />
-            Processamento local. O texto não é salvo nem enviado.
-          </span>
         </div>
       </div>
     </div>

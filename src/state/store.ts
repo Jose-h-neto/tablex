@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { z } from 'zod';
-import { currentCompetencia } from '../domain/competencia';
+import { currentCompetencia, sameCompetencia } from '../domain/competencia';
 import {
   DEFAULT_SETTINGS,
   ImportSettingsSchema,
@@ -14,10 +14,10 @@ import {
   type ReviewState,
   type RubricDictionary,
 } from '../domain/types';
-import { processText, type ProcessResult } from '../engine/pipeline';
+import { detectCompetencia, processText, repeatedMessageExclusions, type ProcessResult } from '../engine/pipeline';
 import { DOCUMENTED_RUBRICS, setMapping } from '../engine/RubricMapper';
 
-export type Filter = 'todos' | 'valido' | 'atencao' | 'bloqueado' | 'excluido';
+export type ReviewTab = 'resolver' | 'prontos' | 'fora';
 
 export interface ExportRecord {
   ids: Set<string>;
@@ -51,12 +51,8 @@ export interface AppState extends PersistedState {
   history: ReviewState[];
   version: number;
   selection: Set<string>;
-  focusedId: string | null;
   sourceFocus: SourceFocus | null;
-  tableScrollNonce: number;
-  filter: Filter;
-  issueFilter: IssueCode | null;
-  search: string;
+  tab: ReviewTab;
   exported: ExportRecord | null;
   customTemplate: { name: string; buffer: ArrayBuffer } | null;
   settingsOpen: false | 'importacao' | 'rubricas' | 'modelo';
@@ -82,11 +78,8 @@ export interface AppState extends PersistedState {
   setSplitRatio(r: number): void;
 
   select(ids: string[], mode?: 'replace' | 'add' | 'toggle'): void;
-  focus(id: string | null, opts?: { scrollSource?: boolean; scrollTable?: boolean }): void;
   focusSource(start: number, end: number): void;
-  setFilter(f: Filter): void;
-  setIssueFilter(c: IssueCode | null): void;
-  setSearch(s: string): void;
+  setTab(t: ReviewTab): void;
   setExported(r: ExportRecord | null): void;
   setCustomTemplate(t: AppState['customTemplate']): void;
   openSettings(tab: AppState['settingsOpen']): void;
@@ -121,12 +114,8 @@ export const useApp = create<AppState>()(
         history: [],
         version: 0,
         selection: new Set(),
-        focusedId: null,
         sourceFocus: null,
-        tableScrollNonce: 0,
-        filter: 'todos',
-        issueFilter: null,
-        search: '',
+        tab: 'resolver',
         exported: null,
         customTemplate: null,
         settingsOpen: false,
@@ -137,17 +126,17 @@ export const useApp = create<AppState>()(
         process: () => {
           const { inputText, sessionCompetencia } = get();
           if (!inputText.trim()) return;
-          const result = processText(inputText, sessionCompetencia);
+          let result = processText(inputText, sessionCompetencia);
+          const detected = detectCompetencia(result.messages);
+          if (detected && !sameCompetencia(detected, sessionCompetencia)) result = processText(inputText, detected);
           set((s) => ({
             result,
             phase: 'review',
-            review: emptyReview(),
+            sessionCompetencia: detected ?? sessionCompetencia,
+            review: { ...emptyReview(), excluded: repeatedMessageExclusions(result) },
             history: [],
             selection: new Set(),
-            focusedId: result.movements[0]?.id ?? null,
-            filter: 'todos',
-            issueFilter: null,
-            search: '',
+            tab: 'resolver',
             exported: null,
             version: s.version + 1,
           }));
@@ -161,7 +150,6 @@ export const useApp = create<AppState>()(
             review: emptyReview(),
             history: [],
             selection: new Set(),
-            focusedId: null,
             exported: null,
             version: s.version + 1,
           })),
@@ -230,19 +218,8 @@ export const useApp = create<AppState>()(
             else ids.forEach((id) => (next.has(id) ? next.delete(id) : next.add(id)));
             return { selection: next };
           }),
-        focus: (id, opts) =>
-          set((s) => {
-            const m = id ? s.result?.movements.find((x) => x.id === id) : null;
-            return {
-              focusedId: id,
-              sourceFocus: m && opts?.scrollSource !== false ? { start: m.fragmentSpan.start, end: m.fragmentSpan.end, nonce: Date.now() } : s.sourceFocus,
-              tableScrollNonce: opts?.scrollTable ? s.tableScrollNonce + 1 : s.tableScrollNonce,
-            };
-          }),
         focusSource: (start, end) => set({ sourceFocus: { start, end, nonce: Date.now() } }),
-        setFilter: (filter) => set({ filter }),
-        setIssueFilter: (issueFilter) => set({ issueFilter }),
-        setSearch: (search) => set({ search }),
+        setTab: (tab) => set({ tab, selection: new Set() }),
         setExported: (exported) => set({ exported }),
         setCustomTemplate: (customTemplate) => set((s) => ({ customTemplate, version: s.version + 1 })),
         openSettings: (settingsOpen) => set({ settingsOpen }),

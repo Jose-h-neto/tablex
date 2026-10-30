@@ -1,5 +1,5 @@
 import { formatCompetencia, formatIsoBr } from '../domain/competencia';
-import type { Competencia, EmployeeEntry, Movement, ParsedMessage, Segment } from '../domain/types';
+import type { Competencia, EmployeeEntry, Exclusion, Movement, ParsedMessage, Segment } from '../domain/types';
 import { classifyEntry, type MovementDraft } from './MovementClassifier';
 import { parseMessages } from './MessageParser';
 
@@ -25,6 +25,26 @@ export function buildObservation(d: MovementDraft): string {
     );
   }
   return parts.join(' — ').slice(0, 200);
+}
+
+/** Competência mais recente citada nas mensagens: dispensa o usuário de informá-la. */
+export function detectCompetencia(messages: ParsedMessage[]): Competencia | null {
+  let best: Competencia | null = null;
+  for (const m of messages) {
+    const c = m.competencia;
+    if (c && (!best || c.year * 12 + c.month > best.year * 12 + best.month)) best = c;
+  }
+  return best;
+}
+
+/** Lançamentos de mensagens idênticas a uma anterior: ignorados de início, sempre visíveis em "Fora". */
+export function repeatedMessageExclusions(result: ProcessResult): Record<string, Exclusion> {
+  const repeated = new Set(result.messages.filter((m) => m.duplicateOf).map((m) => m.id));
+  const excluded: Record<string, Exclusion> = {};
+  for (const m of result.movements) {
+    if (repeated.has(m.messageId)) excluded[m.id] = { reason: 'duplicidade', note: 'Mensagem repetida' };
+  }
+  return excluded;
 }
 
 /**

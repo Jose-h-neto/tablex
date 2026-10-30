@@ -43,7 +43,7 @@ export function SplitView({ left, right }: { left: ReactNode; right: ReactNode }
           if (e.key === 'ArrowLeft') setRatio(ratio - 0.02);
           if (e.key === 'ArrowRight') setRatio(ratio + 0.02);
         }}
-        className="group relative w-1.5 shrink-0 cursor-col-resize bg-slate-200 hover:bg-sel/40 focus-visible:bg-sel/50"
+        className="relative z-10 w-px shrink-0 cursor-col-resize bg-slate-200 hover:bg-slate-400"
       >
         <div className="absolute inset-y-0 -left-1 -right-1" />
       </div>

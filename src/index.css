@@ -21,7 +21,7 @@
     height: 100%;
   }
   body {
-    @apply bg-slate-100 text-slate-800 antialiased;
+    @apply bg-white text-slate-800 antialiased;
     font-size: 13px;
   }
   ::selection {
