@@ -32,29 +32,25 @@ Mesmo cliente das mensagens (as matrículas coincidem). 57 linhas, mesma aba e m
 
 | Coluna | Como foi preenchida | Adotado como |
 |---|---|---|
-| A Código empresa | número (`12345`) | número; valor configurado pelo usuário |
+| A Código empresa | número (`12345`) | número; digitado na tabela e lembrado |
 | B Matricula | número | número |
-| C Código da Rubrica | número (`153` = desconto sindicato) | número; `153` pré-cadastrado para "Desconto sindicato" |
+| C Código da Rubrica | número (`153` = desconto sindicato) | número; `153` já vem para "Desconto sindicato" |
 | D Quantidade/Valor | número, formato `0.00` | número com formato `0.00` |
 | E Data do movimento | data real, **1º dia da competência** (01/09/2026), formato curto (`mm-dd-yy`, nº 14) | padrão "1º dia"; mesmo formato |
 | F Fixar valor? | **vazia** (nenhum lançamento fixo) | "não fixo" = célula vazia |
-| G Observação | vazia | vazia por padrão (opção para preencher) |
+| G Observação | vazia | vazia |
 | H–L | vazias | vazias |
 
-### Pendências de importação (ainda não documentadas)
+### Pontos a confirmar
 
-Os pontos abaixo **não foram inventados**: são configurações que bloqueiam a exportação apenas quando necessárias.
+Nenhum exemplo documenta estes pontos. A ferramenta não presume: o campo fica vazio ou como está, e pode ser editado.
 
-1. **Código da empresa**: informado pelo usuário (na planilha real deste cliente: `12345`).
-2. **Códigos de rubrica**: documentados apenas `153` (sindicato, planilha real), `1005 - HORA AULA PPE` e
-   `1021 - HORA AULA CONTRATURNO` (citados nas mensagens). Os demais tipos são mapeados no dicionário.
-3. **Valor de "Fixar valor?" para lançamento fixo**: nenhum exemplo mostra (S? Sim? 1?). Exigido só quando há
-   lançamento fixo a exportar.
-4. **Horas**: não se sabe se `4h45` deve ir como `4,75` (decimal) ou `4,45` (sexagesimal). Exigido só quando há
-   lançamento em horas a exportar.
-5. **Encerramento de recorrência** ("até dezembro"): a planilha não tem campo de data final. Lançamentos
-   recorrentes saem como fixos e ficam em **Atenção** até confirmação.
-6. Códigos com zero à esquerda (ex.: `0450`) são gravados como texto para não perder dígitos.
+1. **Código da empresa e rubricas**: documentados apenas `153` (sindicato) e os códigos citados nas mensagens
+   (`1005`, `1021`). Os demais são digitados na tabela uma vez e ficam lembrados.
+2. **"Fixar valor?" em lançamento fixo**: nenhum exemplo mostra o valor (S? Sim? 1?). Fica vazio até ser digitado.
+3. **Horas**: `4h45` é gravado como `4,75`. Confirmar se o sistema espera decimal ou horas.minutos (`4,45`).
+4. **Recorrência** ("até dezembro"): a planilha não tem campo de data final; o encerramento é feito no sistema.
+5. **Hora extra**: uma linha por intervalo, com a duração bruta; percentual e refeição não são calculados.
 
 ## 2. Mensagens de referência
 
@@ -113,9 +109,9 @@ Os pontos abaixo **não foram inventados**: são configurações que bloqueiam a
 - Recorrência herdada do cabeçalho de seção ("Acrescentar até o final de dezembro").
 - Datas sem ano (`15/10`): o ano é deduzido da competência.
 
-## 3. Regras de negócio adotadas
+## 3. Regras adotadas
 
-- Nenhum cálculo trabalhista: horas extras usam a duração bruta do intervalo; proporcionais são lançados em dias.
-- Cada lançamento guarda o trecho exato de origem (offset no texto) para rastreabilidade.
-- Nenhuma linha é descartada em silêncio: linhas não reconhecidas aparecem destacadas e entram no relatório de pendências.
-- Só entram na exportação lançamentos **válidos**. Itens em **Atenção** exigem confirmação (que pode ser feita em lote).
+- Nenhum cálculo trabalhista e nenhum valor presumido: o que a mensagem não informa fica vazio.
+- Cada linha da tabela mostra o trecho de origem.
+- Nenhuma linha some em silêncio: linhas não reconhecidas aparecem na tabela e repetidas podem ser recolocadas.
+- Linhas sem rubrica e sem valor não entram no arquivo; o restante entra como está na tela.

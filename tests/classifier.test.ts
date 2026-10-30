@@ -1,163 +1,103 @@
 import { describe, expect, it } from 'vitest';
-import { processText } from '../src/engine/pipeline';
-import type { Movement } from '../src/domain/types';
-import { MSG_AGOSTO, MSG_CORRECOES, MSG_FECHAMENTO, MSG_OUTUBRO } from '../src/sample/mensagensAnonimizadas';
-
-const OUT = { year: 2026, month: 10 };
+import { parseMessages } from '../src/engine/MessageParser';
+import { classifyEntry, type Movement } from '../src/engine/MovementClassifier';
+import { MSG_AGOSTO, MSG_CORRECOES, MSG_FECHAMENTO, MSG_OUTUBRO } from './fixtures/mensagens';
 
 function byMat(text: string, mat: string): Movement[] {
-  return processText(text, OUT).movements.filter((m) => m.matricula === mat);
+  return parseMessages(text)
+    .entries.filter((e) => e.matricula === mat)
+    .flatMap((e) => classifyEntry(e, 2026));
 }
-
-const pick = (m: Movement) => ({ key: m.categoryKey, unit: m.unit, amount: m.amount });
-const codes = (m: Movement) => m.flags.map((f) => f.code);
+const pick = (m: Movement) => [m.categoryKey, m.amount];
 
 describe('descontos', () => {
-  it('dois descontos diferentes na mesma linha geram dois lançamentos', () => {
-    const ms = byMat(MSG_CORRECOES, '502');
-    expect(ms.map(pick)).toEqual([
-      { key: 'DESC_MATERIAL_DIDATICO', unit: 'valor', amount: 210.1 },
-      { key: 'DESC_CONTRATURNO', unit: 'valor', amount: 480 },
-    ]);
-    expect(ms[0]!.nature).toBe('desconto');
-  });
-
-  it('vários funcionários com a mesma categoria', () => {
-    const r = processText(MSG_FECHAMENTO, OUT).movements.filter((m) => m.categoryKey === 'DESC_MATERIAL_DIDATICO');
-    expect(r.map((m) => [m.matricula, m.amount])).toEqual([
-      ['509', 705.1],
-      ['510', 310.2],
-      ['511', 240.15],
-      ['502', 210.1],
+  it('dois descontos na mesma linha geram dois lançamentos', () => {
+    expect(byMat(MSG_CORRECOES, '502').map(pick)).toEqual([
+      ['DESC_MATERIAL_DIDATICO', 210.1],
+      ['DESC_CONTRATURNO', 480],
     ]);
   });
-
-  it('coparticipação por mês de referência', () => {
-    const ms = byMat(MSG_OUTUBRO, '526');
-    expect(ms.map((m) => [m.amount, m.referenceMonths])).toEqual([
-      [150.4, ['agosto']],
-      [38.9, ['setembro']],
+  it('coparticipação por mês', () => {
+    expect(byMat(MSG_OUTUBRO, '526').map(pick)).toEqual([
+      ['DESC_COPARTICIPACAO', 150.4],
+      ['DESC_COPARTICIPACAO', 38.9],
     ]);
   });
-
   it('faltas em dias, aulas e horas', () => {
-    expect(byMat(MSG_OUTUBRO, '527').map(pick)).toEqual([{ key: 'FALTA_HORAS', unit: 'horas', amount: 5 }]);
-    const dia = byMat(MSG_OUTUBRO, '528')[0]!;
-    expect(pick(dia)).toEqual({ key: 'FALTA_DIAS', unit: 'dias', amount: 1 });
-    expect(codes(dia)).toContain('UNIDADE_INFERIDA');
-    expect(byMat(MSG_OUTUBRO, '529')[0]!.referenceDates).toEqual(['2026-09-24', '2026-09-28']);
-    expect(byMat(MSG_AGOSTO, '534').map(pick)).toEqual([{ key: 'FALTA_AULAS', unit: 'aulas', amount: 6 }]);
+    expect(byMat(MSG_OUTUBRO, '527').map(pick)).toEqual([['FALTA_HORAS', 5]]);
+    expect(byMat(MSG_OUTUBRO, '528').map(pick)).toEqual([['FALTA_DIAS', 1]]);
+    expect(byMat(MSG_AGOSTO, '534').map(pick)).toEqual([['FALTA_AULAS', 6]]);
+  });
+  it('desconto sindicato', () => {
+    expect(byMat('501 - FULANO EXEMPLO - R$ 80,50 - desconto sindicato', '501').map(pick)).toEqual([['DESC_SINDICATO', 80.5]]);
   });
 });
 
 describe('substituições', () => {
-  it('horas, inclusive no formato 4h45 e com erro de digitação', () => {
-    expect(byMat(MSG_OUTUBRO, '521').map(pick)).toEqual([{ key: 'SUBST_HORAS', unit: 'horas', amount: 4.75 }]);
-    const ul = byMat(MSG_OUTUBRO, '520')[0]!;
-    expect(pick(ul)).toEqual({ key: 'SUBST_HORAS', unit: 'horas', amount: 10 });
-    expect(ul.referenceDates).toEqual(['2026-10-15', '2026-10-16']);
+  it('horas, com 4h45 e erro de digitação', () => {
+    expect(byMat(MSG_OUTUBRO, '521').map(pick)).toEqual([['SUBST_HORAS', 4.75]]);
+    expect(byMat(MSG_OUTUBRO, '520').map(pick)).toEqual([['SUBST_HORAS', 10]]);
   });
-
-  it('aulas por nível, com herança do contexto "substituição" após o "+"', () => {
+  it('aulas por nível, herdando "substituição" após o "+"', () => {
     expect(byMat(MSG_FECHAMENTO, '516').map(pick)).toEqual([
-      { key: 'SUBST_AULAS_EF1', unit: 'aulas', amount: 2 },
-      { key: 'SUBST_AULAS_EM', unit: 'aulas', amount: 2 },
+      ['SUBST_AULAS_EF1', 2],
+      ['SUBST_AULAS_EM', 2],
     ]);
     expect(byMat(MSG_OUTUBRO, '519').map(pick)).toEqual([
-      { key: 'SUBST_AULAS_EF2', unit: 'aulas', amount: 13.5 },
-      { key: 'SUBST_AULAS_EM', unit: 'aulas', amount: 1 },
+      ['SUBST_AULAS_EF2', 13.5],
+      ['SUBST_AULAS_EM', 1],
     ]);
-    expect(byMat(MSG_FECHAMENTO, '514').map(pick)).toEqual([{ key: 'SUBST_AULAS_EF2', unit: 'aulas', amount: 1 }]);
   });
 });
 
-describe('hora extra por intervalos', () => {
-  it('gera um lançamento por intervalo, com a data correta', () => {
+describe('hora extra', () => {
+  it('um lançamento por intervalo, com a data certa no trecho', () => {
     const ms = byMat(MSG_OUTUBRO, '522');
-    expect(ms.map((m) => [m.amount, m.referenceDates[0]])).toEqual([
-      [6, '2026-09-26'],
-      [2.5, '2026-10-13'],
-      [5, '2026-10-17'],
-    ]);
-    expect(ms.every((m) => codes(m).includes('HORA_EXTRA_REGRA'))).toBe(true);
-    expect(ms[0]!.flags.find((f) => f.code === 'HORA_EXTRA_REGRA')!.message).toMatch(/sábado/);
+    expect(ms.map((m) => m.amount)).toEqual([6, 2.5, 5]);
+    expect(ms.map((m) => m.source)).toEqual(['26/09 06:00 as 12:00', '13/10 07:00 as 09:30', '17/10 07:00 as 12:00']);
   });
-
   it('inclui a linha de continuação', () => {
-    const ms = byMat(MSG_OUTUBRO, '524');
-    expect(ms.map((m) => m.details[0])).toEqual(['sáb 26/09 06:00–12:00', 'ter 13/10 07:00–09:30', 'sáb 17/10 07:00–12:00']);
-    const text = processText(MSG_OUTUBRO, OUT).text;
-    expect(text.slice(ms[2]!.fragmentSpan.start, ms[2]!.fragmentSpan.end)).toBe('17/10 07:00 as 12:00');
-  });
-
-  it('alerta sobre intervalo longo', () => {
-    const long = byMat(MSG_OUTUBRO, '523')[1]!;
-    expect(long.amount).toBe(11.5);
-    expect(long.flags.find((f) => f.code === 'HORA_EXTRA_REGRA')!.message).toMatch(/refeição/);
+    expect(byMat(MSG_OUTUBRO, '524').map((m) => m.source)).toContain('17/10 07:00 as 12:00');
   });
 });
 
-describe('recorrências e salários', () => {
-  it('herda "até o final de dezembro" do cabeçalho da seção', () => {
-    const tutor = byMat(MSG_CORRECOES, '507')[0]!;
-    expect(pick(tutor)).toEqual({ key: 'SALARIO:PROFESSOR TUTOR', unit: 'valor', amount: 450 });
-    expect(tutor.fixed).toBe(true);
-    expect(tutor.recurrence).toEqual({ untilMonth: 12, untilYear: 2026, source: 'secao' });
-    expect(codes(tutor)).toContain('RECORRENCIA');
+describe('salários e recorrência', () => {
+  it('herda a recorrência do cabeçalho, exceto na diferença', () => {
+    const [salario, acresc, dif] = byMat(MSG_CORRECOES, '508');
+    expect(salario!.fixo).toBe(true);
+    expect(pick(acresc!)).toEqual(['ACRESCIMO:REDACAO ENEM', 13.5]);
+    expect(acresc!.fixo).toBe(true);
+    expect(pick(dif!)).toEqual(['DIFERENCA_SALARIAL', null]);
+    expect(dif!.fixo).toBe(false);
   });
-
-  it('não torna recorrente a diferença salarial dentro da seção', () => {
-    const [acresc, dif] = byMat(MSG_CORRECOES, '508').slice(1);
-    expect(pick(acresc!)).toEqual({ key: 'ACRESCIMO:REDACAO ENEM', unit: 'indefinida', amount: 13.5 });
-    expect(acresc!.fixed).toBe(true);
-    expect(pick(dif!)).toEqual({ key: 'DIFERENCA_SALARIAL', unit: 'valor', amount: null });
-    expect(dif!.fixed).toBe(false);
-    expect(dif!.referenceMonths).toEqual(['abril']);
+  it('sem valor na mensagem, o valor fica vazio', () => {
+    const [m] = byMat(MSG_CORRECOES, '501');
+    expect(pick(m!)).toEqual(['SALARIO:COMPLEMENTAR DO CONTRATURNO', null]);
+    expect(m!.fixo).toBe(true);
   });
-
-  it('salário sem valor fica sem quantia (não inventa)', () => {
-    const m = byMat(MSG_CORRECOES, '501')[0]!;
-    expect(pick(m)).toEqual({ key: 'SALARIO:COMPLEMENTAR DO CONTRATURNO', unit: 'valor', amount: null });
-    expect(m.recurrence).toMatchObject({ untilMonth: 12, source: 'texto' });
-    expect(m.referenceMonths).toEqual([]);
-  });
-
-  it('aula mensalista: valor mensal + dias proporcionais, com alerta de mês divergente', () => {
+  it('aula mensalista: valor mensal e dias proporcionais', () => {
     const [mensal, prop] = byMat(MSG_FECHAMENTO, '515');
-    expect(pick(mensal!)).toEqual({ key: 'SALARIO:AULA MENSALISTA NO CONTRATURNO', unit: 'valor', amount: 2500 });
-    expect(mensal!.fixed).toBe(true);
-    expect(pick(prop!)).toEqual({ key: 'PROPORCIONAL:AULA MENSALISTA NO CONTRATURNO', unit: 'dias', amount: 4 });
-    expect(codes(prop!)).toEqual(expect.arrayContaining(['CALCULO_EXTERNO', 'DATA_INCONSISTENTE']));
-    expect(prop!.flags.find((f) => f.code === 'DATA_INCONSISTENTE')!.message).toMatch(/março/);
+    expect(pick(mensal!)).toEqual(['SALARIO:AULA MENSALISTA NO CONTRATURNO', 2500]);
+    expect(mensal!.fixo).toBe(true);
+    expect(pick(prop!)).toEqual(['PROPORCIONAL:AULA MENSALISTA NO CONTRATURNO', 4]);
   });
-
-  it('diferença salarial sem "R$" e complemento em dias', () => {
-    expect(pick(byMat(MSG_CORRECOES, '505')[0]!)).toEqual({ key: 'DIFERENCA_SALARIAL', unit: 'valor', amount: 98.3 });
-    const c = byMat(MSG_CORRECOES, '503')[0]!;
-    expect(pick(c)).toEqual({ key: 'COMPLEMENTO_SALARIO_DIAS', unit: 'dias', amount: 1 });
-    expect(c.referenceDates).toEqual(['2026-05-04']);
+  it('diferença sem "R$" e complemento em dias', () => {
+    expect(pick(byMat(MSG_CORRECOES, '505')[0]!)).toEqual(['DIFERENCA_SALARIAL', 98.3]);
+    expect(pick(byMat(MSG_CORRECOES, '503')[0]!)).toEqual(['COMPLEMENTO_SALARIO_DIAS', 1]);
   });
 });
 
-describe('rubricas citadas na mensagem', () => {
-  it('sub-itens carregam o código explícito e pedem confirmação', () => {
-    const subs = byMat(MSG_CORRECOES, '505').slice(1);
-    expect(subs.map((m) => [m.explicitRubric, m.amount, m.unit])).toEqual([
-      ['1005', 9, 'aulas'],
-      ['1021', 31.5, 'aulas'],
+describe('outros', () => {
+  it('sub-itens carregam a rubrica citada', () => {
+    expect(byMat(MSG_CORRECOES, '505').slice(1).map((m) => [m.rubrica, m.amount])).toEqual([
+      ['1005', 9],
+      ['1021', 31.5],
     ]);
-    expect(subs.every((m) => codes(m).includes('RUBRICA_DA_MENSAGEM'))).toBe(true);
   });
-});
-
-describe('reembolsos', () => {
-  it('identifica o assunto, inclusive pela seção', () => {
-    expect(pick(byMat(MSG_OUTUBRO, '531')[0]!)).toEqual({ key: 'REEMBOLSO:CONSIGNADO', unit: 'valor', amount: 790.3 });
-    expect(pick(byMat(MSG_OUTUBRO, '532')[0]!)).toEqual({ key: 'REEMBOLSO:ESTACIONAMENTO', unit: 'valor', amount: 130 });
+  it('reembolsos pelo assunto, inclusive pela seção', () => {
+    expect(byMat(MSG_OUTUBRO, '531').map(pick)).toEqual([['REEMBOLSO:CONSIGNADO', 790.3]]);
+    expect(byMat(MSG_OUTUBRO, '532').map(pick)).toEqual([['REEMBOLSO:ESTACIONAMENTO', 130]]);
   });
-});
-
-describe('solicitações não importáveis', () => {
   it.each([
     [MSG_CORRECOES, '504', 'ALTERACAO_CADASTRAL'],
     [MSG_CORRECOES, '506', 'INFO_VINCULO'],
@@ -165,29 +105,10 @@ describe('solicitações não importáveis', () => {
     [MSG_FECHAMENTO, '517', 'CONFERENCIA'],
     [MSG_OUTUBRO, '530', 'ALTERACAO_CADASTRAL'],
     [MSG_AGOSTO, '501', 'ALTERACAO_CADASTRAL'],
-  ])('matrícula %#', (msg, mat, key) => {
-    const ms = byMat(msg, mat);
-    expect(ms).toHaveLength(1);
-    expect(ms[0]!.categoryKey).toBe(key);
-    expect(ms[0]!.importable).toBe(false);
-    expect(codes(ms[0]!)).toContain('NAO_IMPORTAVEL');
+  ])('pedido sem lançamento %#', (msg, mat, key) => {
+    expect(byMat(msg, mat).map(pick)).toEqual([[key, null]]);
   });
-
-  it('trecho desconhecido vira lançamento bloqueado, nunca é descartado', () => {
-    const ms = byMat('501 - FULANO EXEMPLO - bônus de natal R$ 50,00', '501');
-    expect(ms).toHaveLength(1);
-    expect(ms[0]!.categoryKey).toBe('NAO_INTERPRETADO');
-    expect(ms[0]!.amount).toBe(50);
-  });
-});
-
-describe('rastreabilidade', () => {
-  it('cada lançamento aponta para um trecho dentro da própria linha', () => {
-    const r = processText([MSG_CORRECOES, MSG_FECHAMENTO, MSG_OUTUBRO, MSG_AGOSTO].join('\n'), OUT);
-    for (const m of r.movements) {
-      const frag = r.text.slice(m.fragmentSpan.start, m.fragmentSpan.end);
-      expect(frag.length).toBeGreaterThan(0);
-      expect(m.sourceText).toBe(frag);
-    }
+  it('trecho desconhecido continua na lista', () => {
+    expect(byMat('501 - FULANO EXEMPLO - bônus de natal', '501').map((m) => m.categoryKey)).toEqual(['NAO_INTERPRETADO']);
   });
 });

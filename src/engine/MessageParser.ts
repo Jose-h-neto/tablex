@@ -1,43 +1,64 @@
-import { parseCompetencia } from '../domain/competencia';
-import type {
-  Competencia,
-  EmployeeEntry,
-  ParsedMessage,
-  Piece,
-  SectionInfo,
-  Segment,
-  SegmentKind,
-  SubItem,
-} from '../domain/types';
-import { findRecurrence } from './MovementNormalizer';
-import { cleanName, collapseSpaces, fold, normalizeInput, splitLines } from './text';
+import { parseCompetencia, type Competencia } from '../domain/competencia';
+import { isRecurrent } from './MovementNormalizer';
+import { cleanName, collapseSpaces, fold } from './text';
 
-export interface ParseOutput {
-  text: string;
-  messages: ParsedMessage[];
-  segments: Segment[];
-  entries: EmployeeEntry[];
+export type SectionKind = 'DESCONTOS' | 'FALTAS' | 'SUBSTITUICOES' | 'HORA_EXTRA' | 'COPARTICIPACAO' | 'REEMBOLSOS' | 'CADASTRAL' | 'ACRESCIMOS' | 'CORRECOES' | 'OUTRA';
+
+export interface SectionInfo {
+  kind: SectionKind;
+  recurrent: boolean;
 }
 
-/* ---------- Classificação de linhas ---------- */
+export interface SubItem {
+  code: string;
+  label: string;
+  valueText: string;
+  line: number;
+  text: string;
+}
+
+export interface EmployeeEntry {
+  messageIndex: number;
+  line: number;
+  matricula: string;
+  name: string;
+  /** Descrição após o nome, somada às linhas de continuação. */
+  text: string;
+  subitems: SubItem[];
+  section: SectionInfo | null;
+}
+
+/** Linha que não virou lançamento e precisa continuar visível (não reconhecida ou citação de anexo). */
+export interface LooseLine {
+  messageIndex: number;
+  line: number;
+  text: string;
+}
+
+export interface ParseOutput {
+  /** Competência informada em cada mensagem (índice = messageIndex). */
+  competencias: (Competencia | null)[];
+  entries: EmployeeEntry[];
+  loose: LooseLine[];
+}
 
 const SEPARATOR_RE = /^\s*(?:-{3,}|={3,}|_{3,}|\*{3,})\s*$/;
 const RECIPIENT_RE = /^\s*(\p{Lu}\p{Ll}+)(?:\s+(\p{Lu}\p{Ll}+))?\s*[,!.]*\s*$/u;
 const RECIPIENT_GREETING_RE = /^\s*(\p{Lu}\p{Ll}+)\s*,\s*(?:bom dia|boa tarde|boa noite|ol[aá]|oi|tudo bem)\b/iu;
-const GREETING_RE =
-  /^(bom dia|boa tarde|boa noite|ola\b|oi\b|prezad|espero|tudo bem|segue|seguem|obrigad|att\b|atenciosamente|abs\b|abracos|qualquer duvida|fico no aguardo|grat[ao])/;
+const GREETING_RE = /^(bom dia|boa tarde|boa noite|ola\b|oi\b|prezad|espero|tudo bem|segue|seguem|obrigad|att\b|atenciosamente|abs\b|abracos|qualquer duvida|fico no aguardo|grat[ao])/;
 const ATTACHMENT_RE = /(segue|seguem|em)\s+(o\s+|os\s+)?(arquivo|anexo|planilha)|\banexo\b/;
 const EMPLOYEE_RE = /^\s*(\d{1,7})(?!\d)(?!\s*[/:,.]\s*\d)\s*[-–—.:]?\s*(?=[^\d\s/:])/;
 const PAYROLL_TERMS_RE = /\b(hora|horas|aula|aulas|salario|adicional|dsr|gratificacao|desconto|abono|bonus|ppe|contraturno)\b/;
 const SUBITEM_VALUE_RE = /[-:=]\s*(?:correto|correta|corrigir para|passa a ser|ajustar para|novo valor)?\s*:?\s*(\d+(?:[.,]\d+)?)\s*$/;
 const CONTINUATION_DATA_RE = /\d{1,2}\/\d{1,2}|\d{1,2}[:h]\d{2}|r\$\s*\d/;
 const NAME_CONNECTORS = new Set(['de', 'da', 'do', 'das', 'dos', 'e', "d'"]);
+const NOT_NAME_START = new Set(['aula', 'aulas', 'hora', 'horas', 'dia', 'dias', 'falta', 'faltas', 'reais', 'de', 'as', 'a', 'h']);
 
-export function detectSection(line: string, comp: Competencia | null): SectionInfo | null {
+export function detectSection(line: string): SectionInfo | null {
   const f = collapseSpaces(fold(line));
   if (!f || /^\d/.test(f) || f.length > 80) return null;
   const core = f.replace(/[\s:.!]+$/, '');
-  const make = (kind: SectionInfo['kind']): SectionInfo => ({ kind, label: collapseSpaces(line).replace(/:\s*$/, ''), recurrence: null });
+  const make = (kind: SectionKind, recurrent = false): SectionInfo => ({ kind, recurrent });
 
   if (/^(segue(m)?\s+(as\s+)?)?correc(ao|oes)\b/.test(core) || /^retificac/.test(core)) return make('CORRECOES');
   if (/^(desconto(s)?\s+(por|de)\s+faltas?|faltas?(\s+e\s+atrasos)?)$/.test(core)) return make('FALTAS');
@@ -47,324 +68,181 @@ export function detectSection(line: string, comp: Competencia | null): SectionIn
   if (/coparticipa/.test(core) && !/r\$/.test(core)) return make('COPARTICIPACAO');
   if (/^(reembolsos?|ressarcimentos?)$/.test(core)) return make('REEMBOLSOS');
   if (/^alterac(ao|oes)\b/.test(core)) return make('CADASTRAL');
-  if (/^(acrescentar|incluir|adicionar|acrescimos?)\b/.test(core) && f.endsWith(':')) {
-    const s = make('ACRESCIMOS');
-    const rec = comp ? findRecurrence(f, comp) : null;
-    s.recurrence = rec ? { ...rec, source: 'secao' } : null;
-    return s;
-  }
+  if (/^(acrescentar|incluir|adicionar|acrescimos?)\b/.test(core) && f.endsWith(':')) return make('ACRESCIMOS', isRecurrent(f));
   if (GREETING_RE.test(core)) return null;
   if (f.endsWith(':') && !/\d/.test(f) && core.split(' ').length <= 6) return make('OUTRA');
   return null;
 }
 
-function findCompetencia(line: string): { comp: Competencia; index: number; length: number } | null {
+function findCompetencia(line: string): Competencia | null {
   const f = fold(line);
-  const preferred = /(?:folha|competencia|mes|fechamento|referente\s+a?o?)\D{0,20}?(\d{1,2}\s*\/\s*\d{4})/.exec(f);
-  const any = /(?<![\d/])(\d{1,2}\s*\/\s*\d{4})(?![\d/])/.exec(f);
-  const m = preferred ?? any;
-  if (!m || m[1] === undefined) return null;
-  const comp = parseCompetencia(m[1].replace(/\s/g, ''));
-  if (!comp) return null;
-  return { comp, index: m.index + m[0].length - m[1].length, length: m[1].length };
+  const m = /(?:folha|competencia|mes|fechamento|referente\s+a?o?)\D{0,20}?(\d{1,2}\s*\/\s*\d{4})/.exec(f) ?? /(?<![\d/])(\d{1,2}\s*\/\s*\d{4})(?![\d/])/.exec(f);
+  return m?.[1] ? parseCompetencia(m[1].replace(/\s/g, '')) : null;
 }
-
-/* ---------- Separação matrícula / nome / descrição ---------- */
-
-interface NameSplit {
-  rawName: string;
-  nameStart: number;
-  remainder: Piece;
-}
-
-const SEPARATOR_AFTER_NAME = /\s+[-–—]\s*|[-–—]\s+|\s*:\s*/;
 
 function isUpperWord(w: string): boolean {
   const letters = w.replace(/[^\p{L}]/gu, '');
   return letters.length > 0 && letters === letters.toUpperCase();
 }
 
-const NOT_NAME_START = new Set(['aula', 'aulas', 'hora', 'horas', 'dia', 'dias', 'falta', 'faltas', 'reais', 'de', 'as', 'a', 'h']);
-
 function looksLikeName(candidate: string): boolean {
-  const c = candidate.replace(/[¿�]/g, '').trim();
+  const c = cleanName(candidate);
   if (c.length < 3 || /\d|r\$/i.test(c)) return false;
   const words = c.split(/\s+/);
   if (NOT_NAME_START.has(fold(words[0] ?? ''))) return false;
   return words.some((w) => /^\p{L}{2,}$/u.test(w.replace(/['’]/g, ''))) && words.length <= 10;
 }
 
-/** `afterNumber` é a linha a partir do primeiro caractere do nome. */
-export function splitNameAndRemainder(afterNumber: string, offset: number): NameSplit | null {
-  const sep = SEPARATOR_AFTER_NAME.exec(afterNumber);
-  if (sep && sep.index > 0) {
-    const candidate = afterNumber.slice(0, sep.index);
-    if (looksLikeName(candidate)) {
-      const remStart = sep.index + sep[0].length;
-      return {
-        rawName: candidate,
-        nameStart: offset,
-        remainder: { text: afterNumber.slice(remStart), start: offset + remStart },
-      };
-    }
+/** Separa nome e descrição: "NOME - desc", "NOME -desc", "NOME- desc", "NOME: desc" ou "NOME  desc". */
+export function splitNameAndRemainder(text: string): { rawName: string; remainder: string } | null {
+  const sep = /\s+[-–—]\s*|[-–—]\s+|\s*:\s*/.exec(text);
+  if (sep && sep.index > 0 && looksLikeName(text.slice(0, sep.index))) {
+    return { rawName: text.slice(0, sep.index), remainder: text.slice(sep.index + sep[0].length) };
   }
-  // Sem separador: o nome termina na primeira palavra que não pertence ao nome
-  // (minúscula fora dos conectores, número ou símbolo), ex.: "FULANO DE TAL  descontar 6 aulas".
-  const wordRe = /\S+/g;
+  // Sem separador: o nome termina na primeira palavra que não pertence a ele.
   let end = 0;
   let count = 0;
-  for (const w of afterNumber.matchAll(wordRe)) {
-    const word = w[0];
-    const isName = /^[\p{L}'’¿]+$/u.test(word) && (isUpperWord(word) || (count > 0 && NAME_CONNECTORS.has(word.toLowerCase())));
+  for (const w of text.matchAll(/\S+/g)) {
+    const isName = /^[\p{L}'’¿]+$/u.test(w[0]) && (isUpperWord(w[0]) || (count > 0 && NAME_CONNECTORS.has(w[0].toLowerCase())));
     if (!isName) break;
-    end = w.index + word.length;
+    end = w.index + w[0].length;
     count++;
   }
-  if (count === 0) {
-    return looksLikeName(afterNumber) ? { rawName: afterNumber, nameStart: offset, remainder: { text: '', start: offset + afterNumber.length } } : null;
-  }
-  const rawName = afterNumber.slice(0, end);
-  if (!looksLikeName(rawName)) return null;
-  return { rawName, nameStart: offset, remainder: { text: afterNumber.slice(end), start: offset + end } };
+  if (count === 0) return looksLikeName(text) ? { rawName: text, remainder: '' } : null;
+  const rawName = text.slice(0, end);
+  return looksLikeName(rawName) ? { rawName, remainder: text.slice(end) } : null;
 }
 
-/* ---------- Parser ---------- */
-
-interface MessageBuilder {
-  msg: ParsedMessage;
-  hasContent: boolean;
-  hasData: boolean;
-  fingerprintLines: string[];
-  section: SectionInfo | null;
-  lastEnd: number;
-}
-
-export function parseMessages(rawText: string, fallbackComp: Competencia): ParseOutput {
-  const text = normalizeInput(rawText);
-  const lines = splitLines(text);
-  const messages: ParsedMessage[] = [];
-  const segments: Segment[] = [];
+export function parseMessages(rawText: string): ParseOutput {
+  const lines = rawText.replace(/\r\n?/g, '\n').split('\n');
+  const competencias: (Competencia | null)[] = [];
   const entries: EmployeeEntry[] = [];
+  const loose: LooseLine[] = [];
 
-  let cur: MessageBuilder | null = null;
-  let prevKind: SegmentKind | 'blank' = 'blank';
+  // Estado da mensagem corrente.
+  let index = -1;
+  let hasContent = false;
+  let hasData = false;
+  let section: SectionInfo | null = null;
+  let prev: 'blank' | 'greeting' | 'recipient' | 'employee' | 'subitem' | 'continuation' | 'other' = 'blank';
+  let lastEntry: EmployeeEntry | null = null;
   /** Linha de funcionário que anunciou sub-itens ("ajustar a carga horária abaixo:"). */
   let subitemParent: EmployeeEntry | null = null;
-  let lastEntry: EmployeeEntry | null = null;
 
-  const closeMessage = () => {
-    if (!cur) return;
-    const previous = messages[messages.length - 1];
-    if (cur.hasContent && !cur.hasData && previous) {
-      // Assinatura/saudação final sem dados: pertence à mensagem anterior.
-      for (const seg of segments) if (seg.messageId === cur.msg.id) seg.messageId = previous.id;
-      previous.span.end = cur.lastEnd;
-    } else if (cur.hasContent) {
-      cur.msg.span.end = cur.lastEnd;
-      cur.msg.fingerprint = cur.fingerprintLines.join('\n');
-      messages.push(cur.msg);
-    }
-    cur = null;
+  const open = () => {
+    index++;
+    competencias[index] = null;
+    hasContent = false;
+    hasData = false;
+    section = null;
+    lastEntry = null;
+    subitemParent = null;
+  };
+  const capture = (line: string) => {
+    if (index >= 0 && !competencias[index]) competencias[index] = findCompetencia(line);
   };
 
-  const openMessage = (start: number): MessageBuilder => {
-    closeMessage();
-    const index = messages.length;
-    const b: MessageBuilder = {
-      msg: {
-        id: `msg${index + 1}`,
-        index,
-        span: { start, end: start },
-        recipient: null,
-        competencia: null,
-        competenciaSpan: null,
-        isCorrection: false,
-        fingerprint: '',
-        duplicateOf: null,
-      },
-      hasContent: false,
-      hasData: false,
-      fingerprintLines: [],
-      section: null,
-      lastEnd: start,
-    };
-    cur = b;
-    return b;
-  };
-
-  const push = (b: MessageBuilder, kind: SegmentKind, line: Piece, note: string | null = null): Segment => {
-    const seg: Segment = {
-      id: `seg${segments.length + 1}`,
-      messageId: b.msg.id,
-      kind,
-      span: { start: line.start, end: line.start + line.text.length },
-      text: line.text,
-      note,
-    };
-    segments.push(seg);
-    b.hasContent = true;
-    b.lastEnd = seg.span.end;
-    if (kind === 'employee' || kind === 'subitem' || kind === 'continuation' || kind === 'section') {
-      b.hasData = true;
-      b.fingerprintLines.push(collapseSpaces(fold(line.text)));
-    }
-    return seg;
-  };
-
-  const captureCompetencia = (b: MessageBuilder, line: Piece) => {
-    if (b.msg.competencia) return;
-    const c = findCompetencia(line.text);
-    if (c) {
-      b.msg.competencia = c.comp;
-      b.msg.competenciaSpan = { start: line.start + c.index, end: line.start + c.index + c.length };
-    }
-  };
-
-  for (const line of lines) {
-    const trimmed = line.text.trim();
+  lines.forEach((line, i) => {
+    const trimmed = line.trim();
     if (!trimmed) {
-      prevKind = 'blank';
+      prev = 'blank';
       subitemParent = null;
-      continue;
+      return;
+    }
+    if (SEPARATOR_RE.test(line)) {
+      open();
+      prev = 'blank';
+      return;
     }
     const folded = collapseSpaces(fold(trimmed));
-
-    if (SEPARATOR_RE.test(line.text)) {
-      const b = cur ?? openMessage(line.start);
-      push(b, 'separator', line);
-      closeMessage();
-      prevKind = 'separator';
-      continue;
-    }
-
-    const empMatch = EMPLOYEE_RE.exec(line.text);
-    const section = empMatch ? null : detectSection(line.text, (cur as MessageBuilder | null)?.msg.competencia ?? fallbackComp);
-    const isGreeting = !empMatch && !section && GREETING_RE.test(folded);
-    const isRecipient = !empMatch && !section && !isGreeting && (RECIPIENT_RE.test(line.text) || RECIPIENT_GREETING_RE.test(line.text));
+    const empMatch = EMPLOYEE_RE.exec(line);
+    const sectionInfo = empMatch ? null : detectSection(line);
+    const isGreeting = !empMatch && !sectionInfo && GREETING_RE.test(folded);
+    const isRecipient = !empMatch && !sectionInfo && !isGreeting && (RECIPIENT_RE.test(line) || RECIPIENT_GREETING_RE.test(line));
 
     if (isRecipient) {
-      const open = cur as MessageBuilder | null;
-      const b = !open || open.hasContent ? openMessage(line.start) : open;
-      b.msg.recipient = (RECIPIENT_GREETING_RE.exec(line.text)?.[1] ?? RECIPIENT_RE.exec(line.text)?.[1]) || null;
-      push(b, 'recipient', line);
-      captureCompetencia(b, line);
-      prevKind = 'recipient';
+      if (index < 0 || hasContent) open();
+      hasContent = true;
+      capture(line);
+      prev = 'recipient';
       lastEntry = null;
-      continue;
+      return;
     }
-
     if (isGreeting) {
-      let b = cur as MessageBuilder | null;
-      if (!b || (b.hasData && prevKind !== 'recipient' && prevKind !== 'greeting' && !ATTACHMENT_RE.test(folded))) b = openMessage(line.start);
-      const isAttachment = ATTACHMENT_RE.test(folded);
-      push(
-        b,
-        isAttachment ? 'info' : 'greeting',
-        line,
-        isAttachment ? 'Menciona arquivo anexo — o conteúdo do anexo não é processado por esta ferramenta.' : null,
-      );
-      captureCompetencia(b, line);
-      prevKind = isAttachment ? 'info' : 'greeting';
+      const attachment = ATTACHMENT_RE.test(folded);
+      if (index < 0 || (hasData && prev !== 'recipient' && prev !== 'greeting' && !attachment)) open();
+      hasContent = true;
+      capture(line);
+      if (attachment) loose.push({ messageIndex: index, line: i, text: trimmed });
+      prev = 'greeting';
       lastEntry = null;
-      continue;
+      return;
     }
 
-    const b: MessageBuilder = cur ?? openMessage(line.start);
+    if (index < 0) open();
+    hasContent = true;
 
-    if (section) {
-      push(b, 'section', line);
-      if (section.kind === 'CORRECOES') b.msg.isCorrection = true;
-      b.section = section;
-      prevKind = 'section';
+    if (sectionInfo) {
+      section = sectionInfo;
+      hasData = true;
+      prev = 'other';
       lastEntry = null;
       subitemParent = null;
-      continue;
+      return;
     }
 
     if (empMatch) {
       const number = empMatch[1]!;
       const nameOffset = empMatch[0].length;
-      const afterNumber = line.text.slice(nameOffset);
-      const lineFolded = fold(line.text);
-
-      // Sub-item: "1005 - HORA AULA PPE - correto 9" após "... ajustar a carga horária abaixo:"
+      const lineFolded = fold(line);
       const subValue = SUBITEM_VALUE_RE.exec(lineFolded);
-      const isSubitem =
-        subitemParent !== null &&
-        subValue !== null &&
-        (PAYROLL_TERMS_RE.test(lineFolded) || /correto|corrigir/.test(lineFolded) || number.length >= 4);
-      if (isSubitem && subitemParent && subValue) {
-        const seg = push(b, 'subitem', line);
-        const valueStart = line.start + subValue.index + subValue[0].lastIndexOf(subValue[1] ?? '');
-        const labelText = afterNumber
-          .slice(0, subValue.index - nameOffset)
-          .replace(/[\s\-–—:]+$/, '')
-          .replace(/^[\s\-–—:]+/, '');
-        const item: SubItem = {
-          segmentId: seg.id,
-          span: seg.span,
+      const parent = subitemParent as EmployeeEntry | null;
+      // Sub-item: "1005 - HORA AULA PPE - correto 9" após "... ajustar a carga horária abaixo:".
+      if (parent && subValue && (PAYROLL_TERMS_RE.test(lineFolded) || /correto|corrigir/.test(lineFolded) || number.length >= 4)) {
+        parent.subitems.push({
           code: number,
-          label: collapseSpaces(labelText),
+          label: collapseSpaces(line.slice(nameOffset, subValue.index).replace(/^[\s\-–—:]+|[\s\-–—:]+$/g, '')),
           valueText: subValue[1] ?? '',
-          valueStart,
-        };
-        subitemParent.subitems.push(item);
-        prevKind = 'subitem';
-        continue;
+          line: i,
+          text: trimmed,
+        });
+        hasData = true;
+        prev = 'subitem';
+        return;
       }
-
-      const split = splitNameAndRemainder(afterNumber, line.start + nameOffset);
+      const split = splitNameAndRemainder(line.slice(nameOffset));
       if (split) {
-        const seg = push(b, 'employee', line);
-        const { name, changed } = cleanName(split.rawName);
         const entry: EmployeeEntry = {
-          id: `ent${entries.length + 1}`,
-          messageId: b.msg.id,
-          segmentId: seg.id,
-          lineSpan: seg.span,
+          messageIndex: index,
+          line: i,
           matricula: number,
-          rawName: split.rawName,
-          name,
-          nameNormalized: changed,
-          remainder: { ...split.remainder },
-          continuations: [],
+          name: cleanName(split.rawName),
+          text: split.remainder.replace(/^[\s\-–—:]+/, ''),
           subitems: [],
-          section: b.section,
+          section,
         };
-        // Remove separadores redundantes no início da descrição (": : 26/09").
-        const lead = /^[\s\-–—:]+/.exec(entry.remainder.text);
-        if (lead) entry.remainder = { text: entry.remainder.text.slice(lead[0].length), start: entry.remainder.start + lead[0].length };
         entries.push(entry);
+        hasData = true;
         lastEntry = entry;
-        subitemParent = /(abaixo|seguinte[s]?)\s*:?\s*$|:\s*$/.test(fold(entry.remainder.text).trim()) ? entry : null;
-        prevKind = 'employee';
-        continue;
+        subitemParent = /(abaixo|seguinte[s]?)\s*:?\s*$|:\s*$/.test(fold(entry.text).trim()) ? entry : null;
+        prev = 'employee';
+        return;
       }
     }
 
     // Continuação da linha anterior (ex.: hora extra que quebrou de linha).
-    if (lastEntry && (prevKind === 'employee' || prevKind === 'continuation') && CONTINUATION_DATA_RE.test(folded)) {
-      const seg = push(b, 'continuation', line);
-      lastEntry.continuations.push({ text: line.text, start: line.start, segmentId: seg.id });
-      prevKind = 'continuation';
-      continue;
+    const last = lastEntry as EmployeeEntry | null;
+    if (last && (prev === 'employee' || prev === 'continuation') && CONTINUATION_DATA_RE.test(folded)) {
+      last.text = `${last.text} / ${trimmed}`;
+      prev = 'continuation';
+      return;
     }
 
-    push(b, 'unrecognized', line, 'Linha não reconhecida: não contém matrícula nem corresponde a um padrão conhecido.');
-    captureCompetencia(b, line);
-    prevKind = 'unrecognized';
+    loose.push({ messageIndex: index, line: i, text: trimmed });
+    capture(line);
+    prev = 'other';
     lastEntry = null;
-  }
-  closeMessage();
+  });
 
-  // Mensagens repetidas (mesmo conteúdo de dados).
-  const seen = new Map<string, string>();
-  for (const msg of messages) {
-    if (!msg.fingerprint) continue;
-    const prev = seen.get(msg.fingerprint);
-    if (prev) msg.duplicateOf = prev;
-    else seen.set(msg.fingerprint, msg.id);
-  }
-
-  return { text, messages, segments, entries };
+  return { competencias, entries, loose };
 }

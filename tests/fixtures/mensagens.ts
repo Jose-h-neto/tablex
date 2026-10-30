@@ -104,5 +104,3 @@ ALTERAÇÃO DE SALÁRIO:
 
 Segue arquivo referente ao consigando mês 08/2026.
 `;
-
-export const SAMPLE_TEXT = [MSG_CORRECOES, MSG_FECHAMENTO, MSG_FECHAMENTO, MSG_OUTUBRO, MSG_AGOSTO].join('\n');
