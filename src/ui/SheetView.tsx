@@ -34,7 +34,7 @@ export function SheetView() {
   const competencia = useApp((s) => s.competencia);
   const { backToMessage, setCompetencia, restoreRemoved, addRow } = useApp.getState();
   const [error, setError] = useState<string | null>(null);
-  const [showMessage, setShowMessage] = useState(false);
+  const [showMessage, setShowMessage] = useState(true);
 
   const exportable = rows.filter(isExportable);
   const left = rows.length - exportable.length;
